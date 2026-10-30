@@ -1,0 +1,1159 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<script>
+window.TICKET_LOCAL = true;
+(function () {
+  const KEY = "ticketdb:";
+  const listeners = new Set();
+  const read = p => { try { const v = localStorage.getItem(KEY + p); return v ? JSON.parse(v) : null; } catch { return null; } };
+  const write = (p, v) => { try { v === null ? localStorage.removeItem(KEY + p) : localStorage.setItem(KEY + p, JSON.stringify(v)); } catch {} listeners.forEach(f => f()); };
+  const keys = prefix => { const out = []; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(KEY + prefix + "/")) out.push(k.slice(KEY.length)); } } catch {} return out; };
+  addEventListener("storage", e => { if (e.key && e.key.startsWith(KEY)) listeners.forEach(f => f()); });
+  const snap = (path, data) => ({ id: path.split("/").pop(), exists: data != null, data: () => data == null ? undefined : data, metadata: { fromCache: false, hasPendingWrites: false } });
+  const watch = fn => { listeners.add(fn); setTimeout(fn, 0); return () => listeners.delete(fn); };
+  function doc(path) {
+    return {
+      id: path.split("/").pop(), path,
+      get: async () => snap(path, read(path)),
+      set: async d => write(path, JSON.parse(JSON.stringify(d))),
+      update: async d => write(path, Object.assign(read(path) || {}, JSON.parse(JSON.stringify(d)))),
+      delete: async () => write(path, null),
+      acquire: async () => ({ acquired: true, version: 1 }),
+      onSnapshot: next => watch(() => next(snap(path, read(path)))),
+    };
+  }
+  function query(path, order, lim) {
+    const run = () => {
+      let docs = keys(path).filter(k => k.split("/").length === path.split("/").length + 1).map(k => snap(k, read(k)));
+      if (order) docs.sort((a, b) => ((a.data()[order[0]] > b.data()[order[0]]) - (a.data()[order[0]] < b.data()[order[0]])) * (order[1] === "desc" ? -1 : 1));
+      if (lim) docs = docs.slice(0, lim);
+      return { docs, size: docs.length, empty: !docs.length, docChanges: () => [], metadata: {} };
+    };
+    return {
+      path,
+      orderBy: (f, d = "asc") => query(path, [f, d], lim),
+      limit: n => query(path, order, n),
+      where: () => query(path, order, lim),
+      get: async () => run(),
+      onSnapshot: next => watch(() => next(run())),
+      doc: id => doc(path + "/" + (id || Math.random().toString(36).slice(2, 12))),
+      add: async d => { const r = doc(path + "/" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)); await r.set(d); return r; },
+    };
+  }
+  const db = { doc, collection: p => query(p) };
+  const downloads = {
+    save: async ({ filename, data }) => {
+      const blob = data instanceof Blob ? data : new Blob([data]);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      return { status: "saved" };
+    },
+  };
+  const caps = { db, downloads };
+  window.claude = { use: async name => caps[name] || null };
+})();
+</script>
+</head>
+<body>
+<title>รันเลขตั๋ว S.P. Arcade</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Carlito:wght@700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="template.js"></script>
+<style>
+/* Layout: control panel beside the exact output, then the ticket editor (text | layout), then history */
+:root {
+  --bg: #f6f4f4;
+  --surface: #ffffff;
+  --ink: #1e1a1a;
+  --muted: #6d6464;
+  --line: #e3dcdc;
+  --accent: #c40000;
+  --accent-ink: #ffffff;
+  --accent-soft: #fbe9e9;
+  --ok: #1f7a3d;
+  --warn: #9a5b00;
+  --paper: #ffffff;
+  --font-ui: "IBM Plex Sans Thai", "Leelawadee UI", Tahoma, sans-serif;
+  --font-num: "IBM Plex Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141212; --surface: #1e1b1b; --ink: #f2eded; --muted: #a49b9b; --line: #342e2e;
+    --accent: #ff5a52; --accent-ink: #1a0000; --accent-soft: #3a1c1c; --ok: #5fd08a; --warn: #f0b35a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141212; --surface: #1e1b1b; --ink: #f2eded; --muted: #a49b9b; --line: #342e2e;
+  --accent: #ff5a52; --accent-ink: #1a0000; --accent-soft: #3a1c1c; --ok: #5fd08a; --warn: #f0b35a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 24px; }
+header h1 { font-size: 26px; line-height: 1.25; margin: 0; text-wrap: balance; }
+header p { margin: 4px 0 0; color: var(--muted); }
+.grid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 820px) { .grid, .grid2 { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 18px; min-width: 0; }
+.panel h2 { font-size: 16px; margin: 0; }
+.label { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.next { display: grid; gap: 2px; }
+.next .num { font-family: var(--font-num); font-size: 56px; font-weight: 600; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
+.next .src { font-size: 13px; color: var(--muted); }
+.manual { display: flex; gap: 8px; align-items: center; }
+input[type="number"], input[type="text"], textarea {
+  font: 500 15px var(--font-ui); width: 100%; min-width: 0; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+}
+input[type="number"] { font: 600 18px var(--font-num); font-variant-numeric: tabular-nums; }
+textarea { resize: vertical; line-height: 1.5; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.modes button { border: 0; background: transparent; padding: 8px 6px; display: grid; gap: 0; line-height: 1.3; text-align: center; }
+.modes button small { font-weight: 400; font-size: 12px; color: var(--muted); }
+.modes button[aria-pressed="true"] { background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.12); color: var(--accent); }
+.stepper { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 8px; align-items: center; }
+.stepper input { text-align: center; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips button { padding: 5px 12px; font-size: 13px; border-radius: 999px; }
+.chips button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+button {
+  font: 600 15px var(--font-ui); border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); padding: 9px 14px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); padding: 13px 16px; font-size: 16px; width: 100%; }
+.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--accent); }
+.range { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; }
+.range strong { font-family: var(--font-num); font-size: 22px; font-variant-numeric: tabular-nums; }
+.range span { font-size: 13px; color: var(--muted); }
+.status { font-size: 14px; min-height: 1.5em; margin: 0; }
+.status.ok { color: var(--ok); } .status.err { color: var(--accent); } .status.warn { color: var(--warn); }
+details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+details[open] summary { margin-bottom: 10px; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+
+.view { display: grid; gap: 10px; }
+.preview-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.preview-head h2 { font-size: 16px; margin: 0; }
+.paper { display: block; width: 100%; height: auto; max-width: 100%; background: var(--paper); border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.06); }
+.ticket { aspect-ratio: 1248 / 790; }
+.sheet { aspect-ratio: 4 / 3; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pair figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+.pair figcaption { font-size: 13px; color: var(--muted); }
+
+/* editor: collapsible; sticky live ticket beside (desktop) or above (phone) the fields */
+.editor { padding: 0; gap: 0; }
+.ed-toggle { width: 100%; display: flex; align-items: center; gap: 12px; padding: 16px 20px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+.ed-title { display: grid; gap: 0; flex: 1; min-width: 0; }
+.ed-title strong { font-size: 16px; }
+.ed-title small { font-size: 13px; font-weight: 400; color: var(--muted); }
+.chev { width: 10px; height: 10px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); margin: -4px 4px 0 0; flex: none; }
+.ed-toggle[aria-expanded="true"] .chev { transform: rotate(-135deg); margin-top: 4px; }
+.ed-toggle:hover:not(:disabled) { border: 0; background: var(--bg); }
+.dirty { font-size: 13px; color: var(--warn); font-weight: 500; }
+.ed-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; padding: 4px 20px 20px; align-items: start; border-top: 1px solid var(--line); padding-top: 18px; }
+.ed-preview { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); display: grid; gap: 10px; }
+.ed-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.ed-acts .save { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ed-fields { display: grid; gap: 14px; min-width: 0; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.tabs button { border: 0; background: transparent; padding: 7px 6px; font-size: 14px; }
+.tabs button[aria-selected="true"] { background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.12); color: var(--accent); }
+@media (max-width: 820px) {
+  .ed-body { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 14px 16px 16px; }
+  .ed-preview { top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--surface); padding: 8px 0 10px; margin-top: -8px; border-bottom: 1px solid var(--line); }
+  .ed-preview .hint { display: none; }
+  .ed-toggle { padding: 14px 16px; }
+}
+.fields { display: grid; gap: 14px; }
+.field { display: grid; gap: 6px; }
+.field label { font-size: 13px; font-weight: 600; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.field label button { padding: 0 8px; font-size: 12px; font-weight: 500; border: 0; color: var(--accent); background: transparent; }
+.lay { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+.lay:first-child { border-top: 0; padding-top: 0; }
+.lay-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lay-head strong { font-size: 14px; }
+.lay-head button { padding: 2px 8px; font-size: 12px; font-weight: 500; border: 0; color: var(--accent); background: transparent; }
+.ctl { display: grid; grid-template-columns: 74px minmax(0, 1fr) 104px; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); }
+.ctl input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 28px; }
+.num-in { display: flex; align-items: center; gap: 4px; }
+.num-in input[type="number"] { font-size: 16px; padding: 5px 6px; text-align: right; }
+.num-in span { font-size: 12px; color: var(--muted); width: 26px; flex: none; }
+@media (max-width: 420px) { .ctl { grid-template-columns: 62px minmax(0, 1fr) 96px; gap: 8px; } }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.n { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 600; }
+td.act { text-align: right; }
+td.act button { padding: 6px 10px; font-size: 13px; margin-left: 6px; }
+.empty { color: var(--muted); font-size: 14px; padding: 6px 0; margin: 0; }
+@media (prefers-reduced-motion: no-preference) { button { transition: filter .15s, border-color .15s; } }
+/* phones: 16px inputs so iOS doesn't zoom, roomier tap targets, tighter chrome */
+input[type="text"], textarea { font-size: 16px; }
+.chips button { min-height: 36px; }
+.field label button, .lay-head button { min-height: 32px; margin: -6px -4px; }
+@media (max-width: 600px) {
+  body { padding-block: 18px 32px; }
+  .wrap { gap: 16px; }
+  header h1 { font-size: 22px; }
+  header p { font-size: 14px; }
+  .panel { padding: 16px; }
+  .editor { padding: 0; }
+  .next .num { font-size: 46px; }
+  .grid { gap: 16px; }
+  td, th { padding: 8px 6px; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>รันเลขตั๋วจอดรถ S.P. Arcade</h1>
+    <p>Daily Coupon (Free 12 Hrs.) · เลขรันต่อจากครั้งก่อนให้เอง ได้ทั้งภาพแยกใบ หรือแผ่น A4 แผ่นละ 9 ใบแบบเดิม · แก้ข้อความบนตั๋วได้ ฟอนต์เดิม</p>
+  </header>
+
+  <div class="grid">
+    <section class="panel" aria-label="สร้างตั๋ว">
+      <div class="next">
+        <span class="label">เลขถัดไป</span>
+        <span class="num" id="nextNum">–</span>
+        <span class="src" id="nextSrc">กำลังโหลดเลขล่าสุด…</span>
+      </div>
+
+      <div class="manual" id="manualRow" hidden>
+        <input type="number" id="manualNext" min="0" step="1" value="0" aria-label="เลขเริ่มต้น">
+      </div>
+
+      <div style="display:grid;gap:8px">
+        <span class="label">แบบตั๋ว</span>
+        <div class="modes" id="modes">
+          <button type="button" data-mode="single">แยกใบ<small>ตั๋วละไฟล์ / หน้า</small></button>
+          <button type="button" data-mode="sheet">A4 แผ่นละ 9 ใบ<small>แบบเดิม</small></button>
+        </div>
+      </div>
+
+      <div style="display:grid;gap:8px">
+        <span class="label">รูปแบบไฟล์</span>
+        <div class="chips formats" id="formats" role="group" aria-label="รูปแบบไฟล์"></div>
+      </div>
+
+      <div style="display:grid;gap:8px">
+        <label class="label" for="qty" id="qtyLabel">จำนวนใบ</label>
+        <div class="stepper">
+          <button type="button" id="minus" aria-label="ลดหนึ่ง">−</button>
+          <input type="number" id="qty" min="1" max="500" step="1" value="45">
+          <button type="button" id="plus" aria-label="เพิ่มหนึ่ง">+</button>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <div class="range">
+        <strong id="rangeText">–</strong>
+        <span id="rangeSub"></span>
+      </div>
+
+      <button class="primary" id="go" type="button" disabled>ดาวน์โหลด</button>
+      <p class="status" id="status" role="status"></p>
+
+      <details id="adjust" hidden>
+        <summary>แก้เลขถัดไป</summary>
+        <div style="display:grid;gap:8px">
+          <div class="manual">
+            <input type="number" id="setNext" min="0" step="1" aria-label="เลขถัดไปใหม่">
+            <button type="button" id="saveNext">บันทึก</button>
+          </div>
+          <p class="hint">ใช้ตอนเลขในระบบไม่ตรงกับตั๋วที่ใช้จริง เช่น เคยทำนอกระบบไป</p>
+        </div>
+      </details>
+    </section>
+
+    <section style="display:grid;gap:10px;min-width:0" aria-label="ตัวอย่าง">
+      <div id="viewSingle" class="view">
+        <div class="preview-head">
+          <h2>ภาพที่จะได้</h2>
+          <span class="hint">1248 × 790 px · PNG · คมพอปริ้นที่ 400 dpi</span>
+        </div>
+        <canvas class="paper ticket" id="first" width="1248" height="790" aria-label="ภาพตั๋วใบแรก"></canvas>
+        <div class="pair" id="pair">
+          <figure><canvas class="paper ticket" id="second" width="1248" height="790" aria-label="ภาพตั๋วใบที่สอง"></canvas><figcaption id="secondCap"></figcaption></figure>
+          <figure><canvas class="paper ticket" id="last" width="1248" height="790" aria-label="ภาพตั๋วใบสุดท้าย"></canvas><figcaption id="lastCap"></figcaption></figure>
+        </div>
+        <p class="hint">ไฟล์ชื่อตามเลข เช่น No.894.png ถ้าหลายใบจะรวมเป็นไฟล์ .zip ไฟล์เดียว</p>
+      </div>
+      <div id="viewSheet" class="view" hidden>
+        <div class="preview-head">
+          <h2 id="sheetTitle">แผ่นแรก</h2>
+          <span class="hint">PowerPoint ต้นฉบับ · 9 ใบต่อแผ่น · ปริ้นลง A4 แนวนอน</span>
+        </div>
+        <canvas class="paper sheet" id="sheet" width="1440" height="1080" aria-label="ตัวอย่างแผ่นแรก"></canvas>
+        <p class="hint">ไฟล์ .pptx สร้างจากต้นฉบับเดิม ฟอนต์และสไตล์เดิม เปลี่ยนเฉพาะสิ่งที่แก้</p>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel editor" aria-label="แก้หน้าตาตั๋ว">
+    <button type="button" class="ed-toggle" id="edToggle" aria-expanded="false" aria-controls="edBody">
+      <span class="ed-title"><strong>แก้หน้าตาตั๋ว</strong><small id="edSummary">ข้อความ ขนาด ตำแหน่ง · ฟอนต์เดิม</small></span>
+      <span class="dirty" id="dirtyBadge" hidden>ยังไม่ได้บันทึก</span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="ed-body" id="edBody" hidden>
+      <div class="ed-preview">
+        <canvas class="paper ticket" id="edCanvas" width="1248" height="790" aria-label="ตัวอย่างตั๋วระหว่างแก้"></canvas>
+        <div class="ed-acts">
+          <button type="button" id="resetAll">คืนค่าต้นฉบับ</button>
+          <button type="button" id="saveSettings" class="save">บันทึกให้ทุกคนใช้</button>
+        </div>
+        <p class="hint">ไฟล์ที่ดาวน์โหลดใช้ค่าบนจอ แม้ยังไม่ได้บันทึก</p>
+      </div>
+      <div class="ed-fields">
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tabText" aria-selected="true" aria-controls="textFields">ข้อความ</button>
+          <button type="button" role="tab" id="tabLayout" aria-selected="false" aria-controls="layoutFields">เลย์เอาต์ / ขนาด</button>
+        </div>
+        <div class="fields" id="textFields" role="tabpanel" aria-labelledby="tabText"></div>
+        <div class="fields" id="layoutFields" role="tabpanel" aria-labelledby="tabLayout"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="ประวัติ">
+    <h2>ประวัติการรันเลข</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>เลขที่</th><th>จำนวน</th><th>แบบ</th><th>วันที่</th><th>คนสร้าง</th><th></th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="logEmpty">ยังไม่มีประวัติ ชุดแรกที่ดาวน์โหลดจะขึ้นตรงนี้</p>
+  </section>
+</div>
+
+<script>
+const PER_SHEET = 9;
+// set by the GitHub Pages build: counter, history and settings live in this browser instead of a shared store
+const LOCAL = !!window.TICKET_LOCAL;
+const HOLDER = "tab-" + Math.random().toString(36).slice(2);
+
+/* ---------- ticket model ----------
+   Images are PowerPoint renders of one ticket at 4000 px per 10 in (K px per pt), cropped at (147, 312):
+   full.png has every text except the number, bare.png has no text at all. A field left at its default
+   is copied from full.png, so it is pixel-identical to PowerPoint; an edited field is drawn with the
+   same fonts at the same anchors. */
+const K = 4000 / 720, MM = 72 / 25.4 * K;
+const FONT_CAL = '"Calibri", "Carlito", sans-serif';
+const FONT_CORDIA = '"Cordia New", "CordiaUPC", "Leelawadee UI", sans-serif';
+
+const DEFAULT = {
+  text: {
+    title: "PARKING SERVICE TICKET",
+    place: "S.P. Arcade",
+    coupon1: "Daily Coupon",
+    coupon2: "(Free12Hrs.)",
+    noPrefix: "No.",
+    fine: "**กรุณายื่นคูปองให้เจ้าหน้าที่ตอนนำรถออก หากจอดเกิน 24 ชั่วโมง คิดค่าบริการเพิ่มชั่วโมงละ 20 บาท (เศษนาทีปัดเป็น 1 ชั่วโมง)กรณีคูปองหาย คิดค่าบริการรายชั่วโมงตั้งแต่เวลาที่เข้าจอด **",
+    extra: "ทะเบียนรถ.......................................\nใช้บริการวันที่.........../.........../...........",
+    company: "Nippon Parking Development (Thailand) Co., Ltd\nTel. 02-237-2353",
+  },
+  layout: {
+    title: { s: 100, x: 0, y: 0 },
+    place: { s: 100, x: 0, y: 0 },
+    coupon: { s: 100, s2: 100, x: 0, y: 0 },
+    no: { s: 100, x: 0, y: 0, d: 3 },
+    fine: { s: 100, x: 0, y: 0 },
+    extra: { s: 100, x: 0, y: 0 },
+    company: { s: 100, x: 0, y: 0 },
+  },
+};
+const TEXT_FIELDS = [
+  ["title", "หัวตั๋ว", "input"],
+  ["place", "ชื่อสถานที่", "input"],
+  ["coupon1", "บรรทัดบนในกรอบแดง", "input"],
+  ["coupon2", "บรรทัดล่างในกรอบแดง", "input"],
+  ["noPrefix", "คำหน้าเลข (เลขรันเอง)", "input"],
+  ["fine", "เงื่อนไขภาษาไทย", "area", 3],
+  ["extra", "ทะเบียนรถ / วันที่ใช้บริการ", "area", 2],
+  ["company", "ชื่อบริษัท / เบอร์โทร (ขึ้นบรรทัดใหม่ได้)", "area", 3],
+];
+const LAYOUT_FIELDS = [
+  ["title", "หัวตั๋ว PARKING SERVICE TICKET", [["s", "ขนาด"]]],
+  ["place", "S.P. Arcade", [["s", "ขนาด"]]],
+  ["coupon", "Daily Coupon / (Free12Hrs.)", [["s", "บรรทัดบน"], ["s2", "บรรทัดล่าง"]]],
+  ["no", "เลขที่ No.", [["s", "ขนาด"], ["d", "จำนวนหลัก", 1, 6, 1, "หลัก"]]],
+  ["fine", "เงื่อนไขภาษาไทย", [["s", "ขนาด"]]],
+  ["extra", "ทะเบียนรถ / วันที่ใช้บริการ", [["s", "ขนาด"]]],
+  ["company", "ชื่อบริษัท", [["s", "ขนาด"]]],
+];
+// field geometry in ticket px, measured from the PowerPoint renders
+const G = {
+  title: { def: "PARKING SERVICE TICKET", box: [78.0, 65.3], ink: { l: 78, t: 65, w: 854, h: 79 }, patch: [70, 58, 870, 92] },
+  place: { def: "S.P. Arcade", box: [75.9, 189.3], ink: { l: 76, t: 189, w: 398, h: 54 }, patch: [68, 182, 414, 68] },
+  // text boxes scale from their inner top-left (PowerPoint insets 7.2 pt / 3.6 pt = 40 / 20 px)
+  coupon: { box: [112.6, 277.5], l1: { l: 119, t: 337, px: 16 * K }, l2: { l: 116, t: 446, px: 11 * K }, patch: [82, 296, 606, 226] },
+  no: { box: { x: 1025.7, y: 68.9, w: 187.3, h: 73.06 }, stroke: 0.75 * K, tx: 1125.6, base: 121.5, px: 9 * K },
+  fine: { top: 569.7, left: 68.9, width: 626, wrap: 628, base1: 597.5, pitch: 40, px: 6 * K, patch: [24, 556, 696, 158] },
+  extra: { top: 591.3, left: 729.9, base1: 627.5, pitch: 53, px: 8 * K, patch: [722, 588, 520, 112] },
+  company: { top: 699.0, inkR: 1213, ref: "Nippon Parking Development (Thailand) Co., Ltd", base1: 724.5, pitch: 41, px: 6 * K * 0.982, patch: [722, 701, 520, 77] },
+};
+
+const clone = o => JSON.parse(JSON.stringify(o));
+// ticket numbers are zero-padded to the chosen digit count: 7 -> 007
+const pad = (n, st = settings) => String(n).padStart(Math.max(1, Math.min(6, Math.round(st.layout.no.d || 1))), "0");
+function normalize(s) {
+  const out = clone(DEFAULT);
+  if (s && s.text) for (const k in out.text) if (typeof s.text[k] === "string") out.text[k] = s.text[k];
+  if (s && s.layout) for (const k in out.layout) for (const p in out.layout[k]) { const v = s.layout[k] && Number(s.layout[k][p]); if (Number.isFinite(v)) out.layout[k][p] = v; }
+  return out;
+}
+const sameLayout = (a, b) => Object.keys(b).every(p => a[p] === b[p]);
+function changed(st, field) {
+  const T = st.text, D = DEFAULT.text, L = st.layout, DL = DEFAULT.layout;
+  switch (field) {
+    case "title": case "place": case "fine": case "extra": case "company": return T[field] !== D[field] || !sameLayout(L[field], DL[field]);
+    case "coupon": return T.coupon1 !== D.coupon1 || T.coupon2 !== D.coupon2 || !sameLayout(L.coupon, DL.coupon);
+    case "no": return T.noPrefix !== D.noPrefix || !sameLayout(L.no, DL.no);
+  }
+}
+
+const imgs = { full: new Image(), bare: new Image() };
+const ready = (async () => {
+  // onload rather than decode(): decode() can stall while the tab is in the background
+  const load = (img, src) => new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+  await Promise.all([load(imgs.full, "full.png"), load(imgs.bare, "bare.png")]);
+  try { await Promise.all([document.fonts.load('700 50px Carlito')]); } catch {}
+})();
+
+// --- drawing helpers ---
+function inkOf(ctx, text) { const m = ctx.measureText(text); return { l: -m.actualBoundingBoxLeft, r: m.actualBoundingBoxRight, a: m.actualBoundingBoxAscent, d: m.actualBoundingBoxDescent, w: m.width }; }
+
+function drawWordArt(ctx, text, g, lay) {
+  if (!text.trim()) return;
+  const s = lay.s / 100, [bx, by] = g.box;
+  const l = bx + (g.ink.l - bx) * s + lay.x * MM, t = by + (g.ink.t - by) * s + lay.y * MM;
+  const w = g.ink.w * s, h = g.ink.h * s;
+  ctx.save();
+  ctx.font = `700 200px ${FONT_CAL}`;
+  // like WordArt "textPlain": the text's ink, descenders included, is stretched to fill the box both ways
+  const ink = inkOf(ctx, text);
+  const sx = w / Math.max(1, ink.r - ink.l), sy = h / Math.max(1, ink.a + ink.d);
+  ctx.translate(l, t + ink.a * sy);
+  ctx.scale(sx, sy);
+  ctx.fillStyle = "#cc0000";
+  ctx.fillText(text, -ink.l, 0);
+  ctx.restore();
+}
+
+function drawCoupon(ctx, st) {
+  const g = G.coupon, L = st.layout.coupon, s1 = L.s / 100, s2 = L.s2 / 100, [bx, by] = g.box;
+  const dx = L.x * MM, dy = L.y * MM;
+  ctx.save();
+  ctx.fillStyle = "#cc0000";
+  ctx.textBaseline = "alphabetic";
+  // calibrate the default lines' origin and baseline from their measured ink
+  ctx.font = `700 ${g.l1.px}px ${FONT_CAL}`;
+  const d1 = inkOf(ctx, DEFAULT.text.coupon1);
+  const o1x = g.l1.l - d1.l, b1 = g.l1.t + d1.a;
+  ctx.font = `700 ${g.l2.px}px ${FONT_CAL}`;
+  const d2 = inkOf(ctx, DEFAULT.text.coupon2);
+  const o2x = g.l2.l - d2.l, b2 = g.l2.t + d2.a;
+  const nb1 = by + (b1 - by) * s1, nb2 = nb1 + (b2 - b1) * (s1 + s2) / 2;
+  ctx.font = `700 ${g.l1.px * s1}px ${FONT_CAL}`;
+  ctx.fillText(st.text.coupon1, bx + (o1x - bx) * s1 + dx, nb1 + dy);
+  ctx.font = `700 ${g.l2.px * s2}px ${FONT_CAL}`;
+  ctx.fillText(st.text.coupon2, bx + (o2x - bx) * s1 + dx, nb2 + dy);
+  ctx.restore();
+}
+
+function drawNo(ctx, st, n) {
+  const g = G.no, L = st.layout.no, s = L.s / 100, dx = L.x * MM, dy = L.y * MM;
+  const cx = g.box.x + g.box.w / 2 + dx, cy = g.box.y + g.box.h / 2 + dy;
+  ctx.save();
+  ctx.strokeStyle = "#000"; ctx.lineWidth = g.stroke;
+  ctx.strokeRect(cx - g.box.w * s / 2, cy - g.box.h * s / 2, g.box.w * s, g.box.h * s);
+  if (n != null) {
+    ctx.fillStyle = "#000";
+    ctx.font = `700 ${g.px * s}px ${FONT_CAL}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    const bcx = g.box.x + g.box.w / 2, bcy = g.box.y + g.box.h / 2;
+    ctx.fillText(st.text.noPrefix + pad(n, st), cx + (g.tx - bcx) * s, cy + (g.base - bcy) * s);
+  }
+  ctx.restore();
+}
+
+const segWord = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("th", { granularity: "word" }) : null;
+const segChar = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("th", { granularity: "grapheme" }) : null;
+const words = t => segWord ? [...segWord.segment(t)].map(x => x.segment) : t.split(/(\s+)/);
+const chars = t => segChar ? [...segChar.segment(t)].map(x => x.segment) : [...t];
+
+// The Thai run is drawn wholly in Cordia New (digits too, as PowerPoint does for a th-TH run); "*" is Calibri.
+function fineWidth(ctx, text, px) {
+  let w = 0;
+  for (const r of text.match(/\*+|[^*]+/g) || []) { ctx.font = r[0] === "*" ? `${px}px ${FONT_CAL}` : `${px}px ${FONT_CORDIA}`; w += ctx.measureText(r).width; }
+  return w;
+}
+function wrapLines(ctx, para, width, px) {
+  const out = []; let line = "";
+  for (const w of words(para)) {
+    const tryLine = line + w;
+    // like PowerPoint, trailing spaces don't count toward the fit; "**" style punctuation never starts a line alone
+    if (line && fineWidth(ctx, tryLine.trimEnd(), px) > width && !/^[*.,)\]]+$/.test(w)) { out.push(line.trimEnd()); line = w.replace(/^\s+/, ""); }
+    else line = tryLine;
+  }
+  out.push(line);
+  return out;
+}
+
+function drawFine(ctx, st) {
+  const g = G.fine, L = st.layout.fine, s = L.s / 100, dx = L.x * MM, dy = L.y * MM;
+  const px = g.px * s, left = g.left + dx, base1 = g.top + (g.base1 - g.top) * s + dy, pitch = g.pitch * s;
+  ctx.save();
+  ctx.fillStyle = "#000"; ctx.textBaseline = "alphabetic";
+  const fontFor = c => c === "*" ? `${px}px ${FONT_CAL}` : `${px}px ${FONT_CORDIA}`;
+  let row = 0;
+  for (const para of st.text.fine.split("\n")) {
+    const lines = wrapLines(ctx, para, g.wrap * s, px);
+    lines.forEach((ln, i) => {
+      const y = base1 + row * pitch;
+      const last = i === lines.length - 1;
+      const cs = chars(ln), widths = cs.map(c => { ctx.font = fontFor(c); return ctx.measureText(c).width; });
+      const natural = widths.reduce((a, b) => a + b, 0);
+      const gap = !last && cs.length > 1 ? (g.width - natural) / (cs.length - 1) : 0;
+      let x = left;
+      cs.forEach((c, k) => { ctx.font = fontFor(c); ctx.fillText(c, x, y); x += widths[k] + gap; });
+      if (ln.length) ctx.fillRect(left, y + 4 * s, (last ? natural : g.width), Math.max(1, 2 * s));
+      row++;
+    });
+  }
+  ctx.restore();
+}
+
+function drawCompany(ctx, st) {
+  const g = G.company, L = st.layout.company, s = L.s / 100, dx = L.x * MM, dy = L.y * MM;
+  ctx.save();
+  ctx.fillStyle = "#000"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "right";
+  ctx.font = `${g.px}px ${FONT_CORDIA}`;
+  ctx.textAlign = "left";
+  const d = inkOf(ctx, g.ref);
+  const right = g.inkR + (d.w - d.r);
+  ctx.textAlign = "right";
+  ctx.font = `${g.px * s}px ${FONT_CORDIA}`;
+  st.text.company.split("\n").forEach((ln, i) => ctx.fillText(ln.trim(), right + dx, g.top + (g.base1 - g.top) * s + i * g.pitch * s + dy));
+  ctx.restore();
+}
+
+// plate / date lines: Cordia New bold, left-aligned under the stamp box
+function drawExtra(ctx, st) {
+  const g = G.extra, L = st.layout.extra, s = L.s / 100, dx = L.x * MM, dy = L.y * MM;
+  ctx.save();
+  ctx.fillStyle = "#000"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  ctx.font = `700 ${g.px * s}px ${FONT_CORDIA}`;
+  st.text.extra.split("\n").forEach((ln, i) => ctx.fillText(ln, g.left + dx, g.top + (g.base1 - g.top) * s + i * g.pitch * s + dy));
+  ctx.restore();
+}
+
+function drawTicket(canvas, n, st) {
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(imgs.bare, 0, 0);
+  for (const f of ["title", "place", "coupon", "fine", "extra", "company"]) {
+    if (!changed(st, f)) { const [x, y, w, h] = G[f].patch; ctx.drawImage(imgs.full, x, y, w, h, x, y, w, h); }
+  }
+  if (changed(st, "title")) drawWordArt(ctx, st.text.title, G.title, st.layout.title);
+  if (changed(st, "place")) drawWordArt(ctx, st.text.place, G.place, st.layout.place);
+  if (changed(st, "coupon")) drawCoupon(ctx, st);
+  if (changed(st, "fine")) drawFine(ctx, st);
+  if (changed(st, "extra")) drawExtra(ctx, st);
+  if (changed(st, "company")) drawCompany(ctx, st);
+  drawNo(ctx, st, n);
+}
+
+const work = document.createElement("canvas");
+work.width = 1248; work.height = 790;
+function ticketBlob(n, st) {
+  drawTicket(work, n, st);
+  return new Promise((res, rej) => work.toBlob(b => b ? res(b) : rej(new Error("สร้างภาพไม่สำเร็จ")), "image/png"));
+}
+
+/* ---------- PowerPoint output ---------- */
+const GROUP_SX = 2822304 / 2160240, GROUP_SY = 1775011 / 1456383; // child-coordinate scale of each ticket group
+const EMU_MM = 36000;
+const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function editShapes(xml, name, fn) {
+  const parts = xml.split("<p:sp>");
+  for (let i = 1; i < parts.length; i++) {
+    const end = parts[i].indexOf("</p:sp>");
+    const sp = parts[i].slice(0, end);
+    if (sp.includes(`name="${name}"`)) parts[i] = fn(sp) + parts[i].slice(end);
+  }
+  return parts.join("<p:sp>");
+}
+const paras = sp => sp.match(/<a:p>[\s\S]*?<\/a:p>/g) || [];
+function setRunText(sp, pIdx, text, runIdx = 0) {
+  const p = paras(sp)[pIdx]; if (!p) return sp;
+  let k = -1;
+  const np = p.replace(/<a:r>[\s\S]*?<\/a:r>/g, r => (++k === runIdx) ? r.replace(/<a:t>[\s\S]*?<\/a:t>/, `<a:t>${esc(text)}</a:t>`) : r);
+  return sp.replace(p, np);
+}
+// One paragraph per line, formatted like run `runIdx` of paragraph `pIdx`; with `starIdx`, runs of "*"
+// take that run's formatting instead (the fine print's ** are Calibri, the Thai is Cordia New).
+function rebuildParas(sp, lines, pIdx, runIdx, starIdx) {
+  const ps = paras(sp), tpl = ps[pIdx];
+  const pPr = (tpl.match(/<a:pPr[^>]*\/>|<a:pPr[^>]*>[\s\S]*?<\/a:pPr>/) || [""])[0];
+  const runs = tpl.match(/<a:r>[\s\S]*?<\/a:r>/g);
+  const rPrOf = i => (runs[Math.min(i, runs.length - 1)].match(/<a:rPr[^>]*\/>|<a:rPr[^>]*>[\s\S]*?<\/a:rPr>/) || ["<a:rPr/>"])[0];
+  const rPr = rPrOf(runIdx), star = starIdx == null ? rPr : rPrOf(starIdx);
+  const runXml = l => (starIdx == null ? [l] : (l.match(/\*+|[^*]+/g) || [""])).map(t => `<a:r>${t[0] === "*" ? star : rPr}<a:t xml:space="preserve">${esc(t)}</a:t></a:r>`).join("");
+  const body = lines.map(l => `<a:p>${pPr}${runXml(l)}</a:p>`).join("");
+  const first = sp.indexOf(ps[0]), last = sp.indexOf(ps[ps.length - 1]) + ps[ps.length - 1].length;
+  return sp.slice(0, first) + body + sp.slice(last);
+}
+function scaleSz(sp, s) {
+  const i = sp.indexOf("<p:txBody>");
+  return sp.slice(0, i) + sp.slice(i).replace(/ sz="(\d+)"/g, (_, v) => ` sz="${Math.max(100, Math.round(v * s))}"`);
+}
+function scaleSzPara(sp, pIdx, s) { const p = paras(sp)[pIdx]; return p ? sp.replace(p, p.replace(/ sz="(\d+)"/g, (_, v) => ` sz="${Math.max(100, Math.round(v * s))}"`)) : sp; }
+function xfrm(sp, f) { return sp.replace(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/, (_, x, y, cx, cy) => { const r = f(+x, +y, +cx, +cy); return `<a:off x="${Math.round(r[0])}" y="${Math.round(r[1])}"/><a:ext cx="${Math.round(r[2])}" cy="${Math.round(r[3])}"/>`; }); }
+const move = (sp, xmm, ymm, sx, sy) => (xmm || ymm) ? xfrm(sp, (x, y, cx, cy) => [x + xmm * EMU_MM / sx, y + ymm * EMU_MM / sy, cx, cy]) : sp;
+const noWrap = sp => sp.replace(/<a:bodyPr([^>]*?)wrap="square"/, '<a:bodyPr$1wrap="none"').replace(/<a:bodyPr(?![^>]*wrap=)/, '<a:bodyPr wrap="none"');
+
+function applySettings(xml, st) {
+  const T = st.text, L = st.layout;
+  for (const f of ["title", "place"]) if (changed(st, f)) xml = editShapes(xml, "TF_" + f, sp => {
+    sp = setRunText(sp, 0, T[f]);
+    const s = L[f].s / 100;
+    if (s !== 1) sp = xfrm(sp, (x, y, cx, cy) => [x, y, cx * s, cy * s]);
+    return move(sp, L[f].x, L[f].y, GROUP_SX, GROUP_SY);
+  });
+  if (changed(st, "coupon")) xml = editShapes(xml, "TF_coupon", sp => {
+    sp = setRunText(sp, 0, T.coupon1 + "  "); sp = setRunText(sp, 1, T.coupon2);
+    if (L.coupon.s !== 100) sp = scaleSzPara(sp, 0, L.coupon.s / 100);
+    if (L.coupon.s2 !== 100) sp = scaleSzPara(sp, 1, L.coupon.s2 / 100);
+    return move(noWrap(sp), L.coupon.x, L.coupon.y, GROUP_SX, GROUP_SY);
+  });
+  if (changed(st, "no")) {
+    const s = L.no.s / 100;
+    xml = editShapes(xml, "TF_no", sp => {
+      sp = setRunText(sp, 0, T.noPrefix);
+      if (s !== 1) sp = scaleSz(sp, s);
+      return move(noWrap(sp), L.no.x, L.no.y, 1, 1);
+    });
+    xml = editShapes(xml, "TF_nobox", sp => {
+      if (s !== 1) sp = xfrm(sp, (x, y, cx, cy) => [x + cx * (1 - s) / 2, y + cy * (1 - s) / 2, cx * s, cy * s]);
+      return move(sp, L.no.x, L.no.y, GROUP_SX, GROUP_SY);
+    });
+  }
+  if (changed(st, "fine")) xml = editShapes(xml, "TF_fine", sp => {
+    sp = rebuildParas(sp, T.fine.split("\n"), 0, 1, 0);
+    if (L.fine.s !== 100) sp = scaleSz(sp, L.fine.s / 100);
+    return move(sp, L.fine.x, L.fine.y, 1, 1);
+  });
+  if (changed(st, "extra")) xml = editShapes(xml, "TF_extra", sp => {
+    sp = rebuildParas(sp, T.extra.split("\n"), 0, 0);
+    if (L.extra.s !== 100) sp = scaleSz(sp, L.extra.s / 100);
+    return move(sp, L.extra.x, L.extra.y, 1, 1);
+  });
+  if (changed(st, "company")) xml = editShapes(xml, "TF_company", sp => {
+    sp = rebuildParas(sp, T.company.split("\n").map(l => l.trim()), 0, 0);
+    if (L.company.s !== 100) sp = scaleSz(sp, L.company.s / 100);
+    return move(noWrap(sp), L.company.x, L.company.y, GROUP_SX, GROUP_SY);
+  });
+  return xml;
+}
+
+// Clone the one-slide template into `pages` slides, numbering {{N0}}..{{N8}} from `start`.
+async function buildDeck(start, pages, st) {
+  if (!window.TEMPLATE_B64) throw new Error("โหลดต้นฉบับ PowerPoint ไม่ได้ ลองรีเฟรชหน้า");
+  const zip = await JSZip.loadAsync(Uint8Array.from(atob(window.TEMPLATE_B64), c => c.charCodeAt(0)));
+  const slide = applySettings(await zip.file("ppt/slides/slide1.xml").async("string"), st);
+  const slideRels = await zip.file("ppt/slides/_rels/slide1.xml.rels").async("string");
+  let types = await zip.file("[Content_Types].xml").async("string");
+  let presRels = await zip.file("ppt/_rels/presentation.xml.rels").async("string");
+  let pres = await zip.file("ppt/presentation.xml").async("string");
+  let app = await zip.file("docProps/app.xml").async("string");
+  const ids = [];
+  for (let p = 0; p < pages; p++) {
+    const n = p + 1;
+    zip.file(`ppt/slides/slide${n}.xml`, slide.replace(/\{\{N(\d)\}\}/g, (_, k) => pad(start + p * PER_SHEET + Number(k), st)));
+    if (n === 1) { ids.push(`<p:sldId id="325" r:id="rId2"/>`); continue; }
+    zip.file(`ppt/slides/_rels/slide${n}.xml.rels`, slideRels);
+    types = types.replace("</Types>", `<Override PartName="/ppt/slides/slide${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>`);
+    presRels = presRels.replace("</Relationships>", `<Relationship Id="rIdS${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${n}.xml"/></Relationships>`);
+    ids.push(`<p:sldId id="${325 + p}" r:id="rIdS${n}"/>`);
+  }
+  zip.file("[Content_Types].xml", types);
+  zip.file("ppt/_rels/presentation.xml.rels", presRels);
+  zip.file("ppt/presentation.xml", pres.replace(/<p:sldIdLst>[\s\S]*?<\/p:sldIdLst>/, `<p:sldIdLst>${ids.join("")}</p:sldIdLst>`));
+  zip.file("docProps/app.xml", app.replace(/<Slides>\d+<\/Slides>/, `<Slides>${pages}</Slides>`));
+  return zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+}
+
+const canvasBlob = (c, type, q) => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("สร้างภาพไม่สำเร็จ")), type, q));
+const PT_MM = 25.4 / 72;
+// one A4 sheet as the slide renders it: 720 x 540 pt at K px/pt, the nine tickets at their slide positions
+const sheetCanvas = document.createElement("canvas");
+function drawSheet(c, first, st) {
+  c.width = 4000; c.height = 3000;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < PER_SHEET; i++) { drawTicket(work, first + i, st); ctx.drawImage(work, Math.round(TX[i % 3] * K), Math.round(TY[Math.floor(i / 3)] * K)); }
+}
+function progress(i, total, what) { if (i % 10 === 9) setStatus(`กำลังสร้าง${what} ${i + 1}/${total}…`); }
+
+async function buildFile(start, n, mode, st, format) {
+  const end = start + n - 1, range = n === 1 ? pad(start, st) : `${pad(start, st)}-${pad(end, st)}`;
+  if (mode === "sheet" && format === "pptx") {
+    return { filename: `Daily Ticket 12 Hrs. (180THB Inc. VAT) No. ${range}.pptx`, data: await buildDeck(start, Math.ceil(n / PER_SHEET), st) };
+  }
+  await ready;
+  const { jsPDF } = window.jspdf || {};
+  if ((format === "pdf") && !jsPDF) throw new Error("โหลดตัวสร้าง PDF ไม่ได้ ลองรีเฟรชหน้า");
+
+  if (mode === "sheet") {
+    const pages = Math.ceil(n / PER_SHEET);
+    if (format === "pdf") {
+      // A4 landscape, the 10 x 7.5 in slide centred at 100% so tickets keep their real size
+      const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
+      const w = 720 * PT_MM, h = 540 * PT_MM, x = (297 - w) / 2, y = (210 - h) / 2;
+      for (let p = 0; p < pages; p++) {
+        if (p) pdf.addPage("a4", "landscape");
+        drawSheet(sheetCanvas, start + p * PER_SHEET, st);
+        pdf.addImage(sheetCanvas, "PNG", x, y, w, h, undefined, "FAST");
+        progress(p, pages, "หน้า");
+      }
+      return { filename: `Daily Ticket 12 Hrs. (180THB Inc. VAT) No. ${range}.pdf`, data: pdf.output("blob") };
+    }
+    // png: one image per sheet
+    const files = [];
+    for (let p = 0; p < pages; p++) {
+      const a = start + p * PER_SHEET;
+      drawSheet(sheetCanvas, a, st);
+      files.push([`Sheet No.${pad(a, st)}-${pad(a + PER_SHEET - 1, st)}.png`, await canvasBlob(sheetCanvas, "image/png")]);
+      progress(p, pages, "แผ่น");
+    }
+    if (files.length === 1) return { filename: files[0][0], data: files[0][1] };
+    const zip = new JSZip(); files.forEach(([name, b]) => zip.file(name, b));
+    return { filename: `Daily Ticket Sheets No. ${range} (PNG).zip`, data: await zip.generateAsync({ type: "blob", compression: "STORE" }) };
+  }
+
+  if (format === "pdf") {
+    // one ticket per page, page cut to the ticket's own size
+    const w = 1248 / K * PT_MM, h = 790 / K * PT_MM;
+    const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: [w, h], compress: true });
+    for (let k = start; k <= end; k++) {
+      if (k > start) pdf.addPage([w, h], "landscape");
+      drawTicket(work, k, st);
+      pdf.addImage(work, "PNG", 0, 0, w, h, undefined, "FAST");
+      progress(k - start, n, "ตั๋ว");
+    }
+    return { filename: `Parking Ticket No. ${range}.pdf`, data: pdf.output("blob") };
+  }
+  const type = format === "jpg" ? "image/jpeg" : "image/png", ext = format === "jpg" ? "jpg" : "png";
+  const blobOf = k => { drawTicket(work, k, st); return canvasBlob(work, type, 0.95); };
+  if (n === 1) return { filename: `No.${pad(start, st)}.${ext}`, data: await blobOf(start) };
+  const zip = new JSZip();
+  for (let k = start; k <= end; k++) { zip.file(`No.${pad(k, st)}.${ext}`, await blobOf(k)); progress(k - start, n, "ภาพ"); }
+  return { filename: `Parking Ticket No. ${range} (${ext.toUpperCase()}).zip`, data: await zip.generateAsync({ type: "blob", compression: "STORE" }) };
+}
+window.buildFile = buildFile;
+
+/* ---------- page state ---------- */
+const TX = [27.715, 251.394, 475.074].map(v => v - 1.2), TY = [57.396, 198.882, 340.233].map(v => v - 1.2);
+const TICKET_PT_W = 1248 / K;
+const MODES = {
+  single: { label: "จำนวนใบ", unit: "ใบ", max: 500, chips: [1, 9, 45, 90, 100] },
+  sheet:  { label: "จำนวนแผ่น", unit: "แผ่น", max: 50, chips: [1, 5, 10, 20] },
+};
+const FORMATS = {
+  single: [["png", "PNG", "ภาพ"], ["jpg", "JPG", "ภาพ"], ["pdf", "PDF", "ไฟล์"]],
+  sheet: [["pptx", "PowerPoint", "ไฟล์"], ["pdf", "PDF", "ไฟล์"], ["png", "PNG", "ภาพ"]],
+};
+function describeOutput(mode, format, n) {
+  const pages = Math.ceil(n / PER_SHEET);
+  if (mode === "sheet") {
+    if (format === "pptx") return `${pages} แผ่น · ${n} ใบ · ไฟล์ .pptx ${pages} สไลด์`;
+    if (format === "pdf") return `${pages} แผ่น · ${n} ใบ · PDF ${pages} หน้า A4 แนวนอน`;
+    return `${pages} แผ่น · ${n} ใบ · ${pages === 1 ? "ภาพ .png 1 ไฟล์" : `ภาพ .png ${pages} ไฟล์ใน .zip`}`;
+  }
+  if (format === "pdf") return `${n} ใบ · PDF ${n} หน้า ขนาดเท่าตั๋ว`;
+  const ext = format === "jpg" ? ".jpg" : ".png";
+  return n === 1 ? `1 ใบ · ภาพ ${ext}` : `${n} ใบ · ภาพ ${ext} ${n} ไฟล์ใน .zip`;
+}
+
+const $ = id => document.getElementById(id);
+const state = { next: null, fromDb: false, manual: false, mode: "single", qty: { single: 45, sheet: 5 }, format: { single: "png", sheet: "pptx" }, batches: [], busy: false, readOnly: false, editorOpen: false };
+let settings = clone(DEFAULT), savedSettings = clone(DEFAULT), dirty = false;
+try {
+  const m = localStorage.getItem("ticketMode"); if (MODES[m]) state.mode = m;
+  const f = JSON.parse(localStorage.getItem("ticketFormat") || "null");
+  if (f) for (const k in FORMATS) if (FORMATS[k].some(([v]) => v === f[k])) state.format[k] = f[k];
+  state.editorOpen = localStorage.getItem("ticketEditorOpen") === "1";
+} catch {}
+const remember = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+let db = null, counterRef = null, batchesRef = null, settingsRef = null, downloads = null, user = null, myId = null;
+
+const count = () => state.mode === "sheet" ? state.qty.sheet * PER_SHEET : state.qty.single;
+
+function currentStart() {
+  if (state.fromDb) return state.next;
+  if (!state.manual) return null;
+  const v = parseInt($("manualNext").value, 10);
+  return Number.isFinite(v) && v >= 0 ? v : null;
+}
+function setStatus(text, kind) { const s = $("status"); s.textContent = text; s.className = "status" + (kind ? " " + kind : ""); }
+
+let drawn = "", frame = 0;
+function renderPreview(start, n) {
+  cancelAnimationFrame(frame);
+  frame = requestAnimationFrame(async () => {
+    await ready;
+    const key = JSON.stringify([state.mode, start, n, settings, state.editorOpen]);
+    if (key === drawn) return;
+    drawn = key;
+    if (state.editorOpen) drawTicket($("edCanvas"), start, settings);
+    if (state.mode === "sheet") {
+      const c = $("sheet"), ctx = c.getContext("2d"), k = c.width / 720;
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+      for (let i = 0; i < PER_SHEET; i++) {
+        drawTicket(work, start != null ? start + i : null, settings);
+        ctx.drawImage(work, TX[i % 3] * k, TY[Math.floor(i / 3)] * k, TICKET_PT_W * k, TICKET_PT_W * k * 790 / 1248);
+      }
+      $("sheetTitle").textContent = start != null ? `แผ่นแรก · No. ${pad(start)} – ${pad(start + PER_SHEET - 1)}` : "แผ่นแรก";
+      return;
+    }
+    const end = start != null ? start + n - 1 : null;
+    drawTicket($("first"), start, settings);
+    $("pair").hidden = start == null || n < 2;
+    if (start != null && n >= 2) {
+      drawTicket($("second"), start + 1, settings);
+      drawTicket($("last"), end, settings);
+      $("secondCap").textContent = `ใบที่ 2 · No.${pad(start + 1)}`;
+      $("lastCap").textContent = `ใบสุดท้าย · No.${pad(end)}`;
+    }
+  });
+}
+
+function renderChips() {
+  const m = MODES[state.mode], box = $("chips");
+  box.textContent = "";
+  for (const v of m.chips) {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.n = v; b.textContent = `${v} ${m.unit}`;
+    b.setAttribute("aria-pressed", String(v === state.qty[state.mode]));
+    box.appendChild(b);
+  }
+}
+
+function render() {
+  const m = MODES[state.mode];
+  const start = currentStart();
+  const n = count();
+  const end = start != null ? start + n - 1 : null;
+  $("nextNum").textContent = start != null ? pad(start) : "–";
+  $("manualRow").hidden = !state.manual || state.fromDb;
+  for (const b of $("modes").children) b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode));
+  $("qtyLabel").textContent = m.label;
+  $("qty").max = m.max;
+  $("qty").value = state.qty[state.mode];
+  renderChips();
+  const fmt = state.format[state.mode], fbox = $("formats");
+  fbox.textContent = "";
+  for (const [v, name] of FORMATS[state.mode]) {
+    const b = document.createElement("button"); b.type = "button"; b.dataset.f = v; b.textContent = name;
+    b.setAttribute("aria-pressed", String(v === fmt)); fbox.appendChild(b);
+  }
+  $("viewSingle").hidden = state.mode !== "single";
+  $("viewSheet").hidden = state.mode !== "sheet";
+  $("go").textContent = `ดาวน์โหลด ${FORMATS[state.mode].find(([v]) => v === fmt)[1]}`;
+  $("rangeText").textContent = start != null ? (n === 1 ? `No. ${pad(start)}` : `No. ${pad(start)} – ${pad(end)}`) : "–";
+  $("rangeSub").textContent = start == null ? "ใส่เลขเริ่มต้นก่อน" : describeOutput(state.mode, fmt, n);
+  $("go").disabled = start == null || state.busy || !downloads || state.readOnly;
+  $("dirtyBadge").hidden = !dirty;
+  $("edBody").hidden = !state.editorOpen;
+  $("edToggle").setAttribute("aria-expanded", String(state.editorOpen));
+  $("saveSettings").disabled = !dirty || !settingsRef || state.readOnly;
+  renderPreview(start, n);
+}
+
+/* ---------- editor ---------- */
+function buildEditor() {
+  const tf = $("textFields");
+  for (const [key, label, kind, rows] of TEXT_FIELDS) {
+    const wrap = document.createElement("div"); wrap.className = "field";
+    const id = "t_" + key;
+    wrap.innerHTML = `<label for="${id}"><span></span><button type="button">คืนค่า</button></label>`;
+    wrap.querySelector("span").textContent = label;
+    const el = document.createElement(kind === "area" ? "textarea" : "input");
+    el.id = id; if (kind === "area") el.rows = rows; else el.type = "text";
+    el.addEventListener("input", () => { settings.text[key] = el.value; touch(); });
+    wrap.querySelector("button").addEventListener("click", () => { settings.text[key] = DEFAULT.text[key]; syncEditor(); touch(); });
+    wrap.appendChild(el); tf.appendChild(wrap);
+  }
+  const lf = $("layoutFields");
+  for (const [key, label, sizes] of LAYOUT_FIELDS) {
+    const box = document.createElement("div"); box.className = "lay";
+    box.innerHTML = `<div class="lay-head"><strong></strong><button type="button">คืนค่า</button></div>`;
+    box.querySelector("strong").textContent = label;
+    box.querySelector("button").addEventListener("click", () => { settings.layout[key] = clone(DEFAULT.layout[key]); syncEditor(); touch(); });
+    // slider and a typeable number box, kept in step; typed values are clamped to the slider's range
+    const ctl = (prop, name, min, max, step, unit) => {
+      const row = document.createElement("div"); row.className = "ctl";
+      const id = `l_${key}_${prop}`;
+      row.innerHTML = `<label for="${id}n"></label><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" aria-label="${name}"><span class="num-in"><input type="number" id="${id}n" min="${min}" max="${max}" step="${step}" inputmode="decimal"><span>${unit}</span></span>`;
+      row.querySelector("label").textContent = name;
+      const range = row.querySelector("input[type=range]"), num = row.querySelector("input[type=number]");
+      const set = v => { settings.layout[key][prop] = v; touch(); };
+      range.addEventListener("input", () => { const v = Number(range.value); num.value = v; set(v); });
+      num.addEventListener("input", () => { const v = Number(num.value); if (num.value !== "" && Number.isFinite(v)) { const c = Math.max(min, Math.min(max, v)); range.value = c; set(c); } });
+      num.addEventListener("change", () => { num.value = settings.layout[key][prop]; });
+      range._sync = () => { range.value = settings.layout[key][prop]; if (document.activeElement !== num) num.value = settings.layout[key][prop]; };
+      box.appendChild(row);
+    };
+    for (const [prop, name, min = 50, max = 200, step = 1, unit = "%"] of sizes) ctl(prop, name, min, max, step, unit);
+    ctl("x", "ซ้าย/ขวา", -15, 15, 0.5, "มม.");
+    ctl("y", "ขึ้น/ลง", -15, 15, 0.5, "มม.");
+    lf.appendChild(box);
+  }
+}
+function syncEditor() {
+  for (const [key] of TEXT_FIELDS) { const el = $("t_" + key); if (el.value !== settings.text[key]) el.value = settings.text[key]; }
+  document.querySelectorAll("#layoutFields input[type=range]").forEach(i => i._sync());
+}
+function touch() { dirty = JSON.stringify(settings) !== JSON.stringify(savedSettings); render(); }
+
+async function saveSettings() {
+  if (!settingsRef) return;
+  try {
+    await settingsRef.set({ settings: clone(settings), updatedAt: new Date().toISOString(), by: myId || null });
+    savedSettings = clone(settings); dirty = false; render();
+    setStatus(LOCAL ? "บันทึกหน้าตาตั๋วไว้ในเครื่องนี้แล้ว" : "บันทึกหน้าตาตั๋วแล้ว ทุกคนจะได้แบบนี้", "ok");
+  } catch (e) { setStatus("บันทึกไม่สำเร็จ บัญชีนี้อาจไม่มีสิทธิ์", "err"); }
+}
+
+/* ---------- history ---------- */
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+  catch { return iso; }
+}
+const batchCount = b => b.count ?? (b.end - b.start + 1);
+const batchMode = b => b.mode || "sheet";
+
+async function renderLog() {
+  const body = $("log");
+  body.textContent = "";
+  $("logEmpty").hidden = state.batches.length > 0;
+  let names = {};
+  const ids = [...new Set(state.batches.map(b => b.by).filter(Boolean))];
+  if (user && ids.length) { try { names = await user.profiles(ids); } catch {} }
+  for (const b of state.batches) {
+    const tr = document.createElement("tr");
+    const cells = [
+      ["n", (bs => b.start === b.end ? `No. ${pad(b.start, bs)}` : `No. ${pad(b.start, bs)} – ${pad(b.end, bs)}`)(normalize(b.settings))],
+      ["", `${batchCount(b)} ใบ`],
+      ["", batchMode(b) === "sheet" ? "A4 9 ใบ" : "ภาพแยก"],
+      ["", b.createdAt ? fmtDate(b.createdAt) : "–"],
+      ["", (b.by && names[b.by] && names[b.by].name) || b.note || "–"],
+    ];
+    for (const [cls, text] of cells) { const td = document.createElement("td"); if (cls) td.className = cls; td.textContent = text; tr.appendChild(td); }
+    const td = document.createElement("td"); td.className = "act";
+    for (const mode of ["sheet", "single"]) {
+      const btn = document.createElement("button"); btn.type = "button";
+      btn.textContent = mode === "sheet" ? "A4" : "ภาพแยก";
+      btn.title = `ดาวน์โหลดซ้ำเป็น${mode === "sheet" ? "แผ่น A4" : "ภาพแยกใบ"} หน้าตาเหมือนตอนสร้าง`;
+      btn.disabled = !downloads;
+      btn.addEventListener("click", () => reprint(b, mode));
+      td.appendChild(btn);
+    }
+    tr.appendChild(td); body.appendChild(tr);
+  }
+}
+
+/* ---------- actions ---------- */
+async function save(start, n, mode, st, format) {
+  const file = await buildFile(start, n, mode, st, format);
+  setStatus("รอยืนยันการบันทึกไฟล์…");
+  await downloads.save(file);
+  return start + n - 1;
+}
+
+async function generate() {
+  if (state.busy) return;
+  state.busy = true; render();
+  const n = count(), mode = state.mode, st = clone(settings), format = state.format[mode];
+  try {
+    let start = currentStart();
+    if (counterRef) {
+      setStatus("กำลังจองเลข…");
+      let lease;
+      try { lease = await counterRef.acquire({ holder: HOLDER, ttlMs: 180000 }); }
+      catch (e) { setStatus("จองเลขไม่ได้ บัญชีนี้อาจไม่มีสิทธิ์รันเลข ลองขอสิทธิ์ใช้งานจากเจ้าของลิงก์", "err"); return; }
+      if (!lease.acquired) { setStatus("มีอีกคนกำลังรันเลขอยู่ รอสักครู่แล้วลองใหม่", "warn"); return; }
+      const snap = await counterRef.get();
+      const v = snap.exists ? Number(snap.data().next) : NaN;
+      if (Number.isFinite(v) && v >= 0) start = v;
+      if (start == null) { setStatus("ยังไม่มีเลขเริ่มต้น ตั้งในช่องแก้เลขถัดไปก่อน", "err"); return; }
+    }
+    setStatus("กำลังสร้างไฟล์…");
+    let end;
+    try { end = await save(start, n, mode, st, format); }
+    catch (e) {
+      if (e && e.code === "declined") setStatus("ยกเลิกแล้ว เลขยังไม่ถูกใช้", "warn");
+      else setStatus("ดาวน์โหลดไม่สำเร็จ: " + (e && (e.message || e.code) || e), "err");
+      return;
+    }
+    if (counterRef) {
+      const now = new Date().toISOString();
+      await counterRef.set({ next: end + 1, updatedAt: now });
+      await batchesRef.add({ start, end, count: n, mode, format, settings: st, createdAt: now, by: myId || null });
+      try { await counterRef.acquire({ holder: HOLDER, ttlMs: 1000 }); } catch {}
+    } else {
+      $("manualNext").value = end + 1;
+    }
+    setStatus(`ได้ไฟล์ No. ${pad(start, st)}${n > 1 ? "–" + pad(end, st) : ""} แล้ว เลขถัดไปคือ ${pad(end + 1, st)}`, "ok");
+  } catch (e) {
+    setStatus("เกิดข้อผิดพลาด: " + (e && (e.message || e.code) || e), "err");
+  } finally {
+    state.busy = false; render();
+  }
+}
+
+async function reprint(b, mode) {
+  if (state.busy) return;
+  const n = batchCount(b);
+  if (mode === "sheet" && n % PER_SHEET) { setStatus(`ชุดนี้มี ${n} ใบ ไม่เต็มแผ่น ดาวน์โหลดซ้ำได้เฉพาะแบบภาพแยก`, "warn"); return; }
+  state.busy = true; render();
+  setStatus(`กำลังสร้างไฟล์ซ้ำ No. ${b.start}–${b.end}…`);
+  try { await save(b.start, n, mode, normalize(b.settings), state.format[mode]); setStatus(`ดาวน์โหลดซ้ำ No. ${b.start}–${b.end} แล้ว (เลขถัดไปไม่เปลี่ยน)`, "ok"); }
+  catch (e) { const d = e && e.code === "declined"; setStatus(d ? "ยกเลิกแล้ว" : "ดาวน์โหลดไม่สำเร็จ: " + (e && (e.message || e.code) || e), d ? "warn" : "err"); }
+  finally { state.busy = false; render(); }
+}
+
+async function saveNext() {
+  const v = parseInt($("setNext").value, 10);
+  if (!Number.isFinite(v) || v < 0) { setStatus("ใส่เลขให้ถูกก่อน", "err"); return; }
+  try { await counterRef.set({ next: v, updatedAt: new Date().toISOString() }); setStatus(`ตั้งเลขถัดไปเป็น ${v} แล้ว`, "ok"); $("adjust").open = false; }
+  catch (e) { setStatus("บันทึกไม่สำเร็จ บัญชีนี้อาจไม่มีสิทธิ์แก้เลข", "err"); }
+}
+
+function setQty(v) {
+  const max = MODES[state.mode].max;
+  state.qty[state.mode] = Math.max(1, Math.min(max, Number.isFinite(v) ? v : 1));
+  render();
+}
+
+$("modes").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  state.mode = b.dataset.mode;
+  try { localStorage.setItem("ticketMode", state.mode); } catch {}
+  render();
+});
+$("formats").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  state.format[state.mode] = b.dataset.f;
+  remember("ticketFormat", JSON.stringify(state.format));
+  render();
+});
+function showTab(which) {
+  const text = which === "text";
+  $("tabText").setAttribute("aria-selected", String(text));
+  $("tabLayout").setAttribute("aria-selected", String(!text));
+  $("textFields").hidden = !text;
+  $("layoutFields").hidden = text;
+}
+$("tabText").addEventListener("click", () => showTab("text"));
+$("tabLayout").addEventListener("click", () => showTab("layout"));
+showTab("text");
+$("edToggle").addEventListener("click", () => {
+  state.editorOpen = !state.editorOpen;
+  remember("ticketEditorOpen", state.editorOpen ? "1" : "0");
+  render();
+});
+$("minus").addEventListener("click", () => setQty(state.qty[state.mode] - 1));
+$("plus").addEventListener("click", () => setQty(state.qty[state.mode] + 1));
+$("qty").addEventListener("change", e => setQty(parseInt(e.target.value, 10)));
+$("chips").addEventListener("click", e => { const b = e.target.closest("button"); if (b) setQty(Number(b.dataset.n)); });
+$("manualNext").addEventListener("input", render);
+$("go").addEventListener("click", generate);
+$("saveNext").addEventListener("click", saveNext);
+$("saveSettings").addEventListener("click", saveSettings);
+$("resetAll").addEventListener("click", () => { settings = clone(DEFAULT); syncEditor(); touch(); });
+
+if (LOCAL) $("saveSettings").textContent = "บันทึกไว้ในเครื่องนี้";
+buildEditor();
+syncEditor();
+render();
+renderLog();
+ready.catch(() => setStatus("โหลดภาพต้นฉบับไม่ได้ ลองรีเฟรชหน้า", "err"));
+
+(async () => {
+  const use = window.claude && window.claude.use;
+  if (!use) { offline(); return; }
+  const [d, dl, u] = await Promise.all([use("db"), use("downloads"), use("user")]);
+  downloads = dl; user = u;
+  if (u) { try { myId = await u.id(); } catch {} }
+  if (!dl) setStatus("หน้านี้ดาวน์โหลดไฟล์ไม่ได้ ลองเปิดใน claude.ai", "warn");
+  if (!d) { offline(); return; }
+  db = d;
+  counterRef = db.doc("counter/main");
+  batchesRef = db.collection("batches");
+  settingsRef = db.doc("settings/main");
+  let canWrite = null;
+  if (u) { try { canWrite = await u.can("data.write"); } catch {} }
+  if (canWrite === false) {
+    state.readOnly = true;
+    setStatus("บัญชีนี้ดูได้อย่างเดียว ขอให้เจ้าของลิงก์เพิ่มสิทธิ์ให้ใช้งานได้ ถึงจะรันเลขได้", "warn");
+  } else {
+    $("adjust").hidden = false;
+  }
+  counterRef.onSnapshot(snap => {
+    const v = snap.exists ? Number(snap.data().next) : NaN;
+    if (Number.isFinite(v) && v >= 0) {
+      state.next = v; state.fromDb = true;
+      $("nextSrc").textContent = LOCAL ? "เลขเก็บไว้ในเบราว์เซอร์นี้ เครื่องอื่นนับแยกกัน" : "ทุกคนที่เปิดลิงก์นี้เห็นเลขเดียวกัน";
+      if (!$("adjust").open) $("setNext").value = v;
+    } else {
+      state.fromDb = false; state.manual = true;
+      $("nextSrc").textContent = "ยังไม่มีเลขในระบบ ใส่เลขเริ่มต้นด้านล่าง";
+    }
+    render();
+  }, () => offline());
+  settingsRef.onSnapshot(snap => {
+    savedSettings = normalize(snap.exists ? snap.data().settings : null);
+    if (!dirty) { settings = clone(savedSettings); syncEditor(); }
+    touch();
+  });
+  batchesRef.orderBy("start", "desc").limit(100).onSnapshot(snap => {
+    state.batches = snap.docs.map(x => x.data());
+    renderLog();
+  });
+  render();
+})();
+
+function offline() {
+  state.fromDb = false; state.manual = true;
+  $("nextSrc").textContent = "ไม่ได้เชื่อมระบบเก็บเลข ใส่เลขเริ่มต้นเอง";
+  render();
+}
+</script>
+
+</body>
+</html>
